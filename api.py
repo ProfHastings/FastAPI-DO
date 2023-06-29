@@ -19,7 +19,6 @@ from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import json
-import asyncio
 from pydantic import BaseModel, ValidationError
 from langchain.callbacks.base import AsyncCallbackHandler
 
