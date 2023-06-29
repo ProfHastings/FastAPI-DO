@@ -119,9 +119,8 @@ def fill_tokens(results, max_tokens):
 
 #initializes Pinecone index to make database requests
 def get_index():
-    api_key = "953b2be8-0621-42a1-99db-8480079a9e23"
     env = "eu-west4-gcp"
-    pinecone.init(api_key=api_key, environment=env)
+    pinecone.init(environment=env)
     return pinecone.Index("justiz-openai")
 
 #loads dense and sparse encoder models and returns retriever to send requests to the database
