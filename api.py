@@ -21,6 +21,7 @@ from pydantic import BaseModel
 import json
 from pydantic import BaseModel, ValidationError
 from langchain.callbacks.base import AsyncCallbackHandler
+import uvicorn
 
 #init of global gpt-4 model, gpt-3.5-turbo model and OpenAI tokenizer
 gpt4_maxtokens = 8192
@@ -250,6 +251,10 @@ origins = [
     "http://localhost:3000",
     "https://www.zeilertech.com",
     "https://www.profhastings.com"
+    "https://138.197.186.94:8000"
+    "https://138.197.186.94"
+    "http://138.197.186.94:8000"
+    "http://138.197.186.94"
 ]
 
 app.add_middleware(
@@ -303,5 +308,4 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.send_text(token)
 
 if __name__ == "__main__":
-    queue = asyncio.Queue()
-    asyncio.run(main("Alfred arbeitet in einer Fabrik und schläft wo während er am Fließband arbeitet. Es entsteht ein erheblicher Schaden. Kann er zu Schadenersatz verurteilt werden?", MyCustomAsyncHandler(queue), queue))
+    uvicorn.run(app, host='0.0.0.0', port=8000)
