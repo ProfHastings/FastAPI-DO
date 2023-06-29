@@ -250,10 +250,10 @@ app = FastAPI()
 origins = [
     "http://localhost:3000",
     "https://www.zeilertech.com",
-    "https://www.profhastings.com"
-    "https://138.197.186.94:8000"
-    "https://138.197.186.94"
-    "http://138.197.186.94:8000"
+    "https://www.profhastings.com",
+    "https://138.197.186.94:8000",
+    "https://138.197.186.94",
+    "http://138.197.186.94:8000",
     "http://138.197.186.94"
 ]
 
