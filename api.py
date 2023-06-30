@@ -95,16 +95,23 @@ def get_index():
     return pinecone.Index("justiz-openai-full")
 
 #(next two functions) uses async api calls to rank chunks from 1-10 based on relevance
-async def async_rank(case, question, max_attempts=5):
+async def async_rank(case, question, max_attempts=5, timeout_seconds=5):
     for attempt in range(max_attempts):
         try:
             ranking_userprompt = ranking_template.format(case=case.page_content, question=question)
             ranking_user_message = HumanMessage(content=ranking_userprompt)
-            relevance = await gpt35._agenerate([ranking_system_message, ranking_user_message])
+            
+            relevance = await asyncio.wait_for(
+                gpt35._agenerate([ranking_system_message, ranking_user_message]),
+                timeout=timeout_seconds
+            )
+            
             relevance_score = float(relevance.generations[0].text)
             return (case, relevance_score)
         except ValueError:
             print(f"Attempt {attempt + 1} failed, did not return ranking number")
+        except asyncio.TimeoutError:
+            print(f"Attempt {attempt + 1} timed out, retrying...")
     print(f"All {max_attempts} attempts failed. Returning default relevance score of 1.")
     return (case, 1)
 
