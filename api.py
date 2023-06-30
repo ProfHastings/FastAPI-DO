@@ -149,7 +149,7 @@ def get_data(id):
     parts = id.rsplit('_', 1)
     long_source = parts[0]
     chunknr = int(parts[1])
-    file_path = os.path.join('database', f'{long_source}.txt')
+    file_path = os.path.join('/database', f'{long_source}.txt')
     try:
         with open(file_path, 'r', encoding='utf-8') as file:
             text = file.read()
@@ -183,13 +183,13 @@ def hybrid_scale(dense, sparse, alpha: float):
     hdense = [v * alpha for v in dense]
     return hdense, hsparse
 
-def hybrid_query(question, top_k, alpha):
+def hybrid_query(dataquery, top_k, alpha):
     index = get_index()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     sparse_encoder = SpladeEncoder(device=device)
     dense_encoder = OpenAIEmbeddings(model="text-embedding-ada-002")
-    sparse_vec = sparse_encoder.encode_documents([question])[0]
-    dense_vec = dense_encoder.embed_documents([question])[0]
+    sparse_vec = sparse_encoder.encode_documents([dataquery])[0]
+    dense_vec = dense_encoder.embed_documents([dataquery])[0]
     dense_vec, sparse_vec = hybrid_scale(dense_vec, sparse_vec, alpha)
 
     result = index.query(
@@ -207,9 +207,10 @@ async def main(question, streamhandler, queue):
         print("Invalid input. Please provide a string.")
         return
     dataquery = get_dataquery(question)
-    id_list = hybrid_query(dataquery)
+    id_list = hybrid_query(dataquery=dataquery, top_k=75, alpha=0.99899)
+    print(f"id_list: {id_list}")
     results = getfullresults(id_list)
-    print(results)
+    print(f"Unranked results: {results}")
     print(f"Found this many cases: {len(results)}")
 
     results, sum_of_relevance = await rank_concurrently(results, question)  # Replaced rank_cases with rank_concurrently
