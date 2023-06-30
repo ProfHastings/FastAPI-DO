@@ -94,17 +94,7 @@ def get_index():
     pinecone.init(environment=env)
     return pinecone.Index("justiz-openai-full")
 
-#loads dense and sparse encoder models and returns retriever to send requests to the database
-def get_retriever():
-    index = get_index()
-    os.environ["TOKENIZERS_PARALLELISM"] = "false"
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dense_encoder = OpenAIEmbeddings(model="text-embedding-ada-002")
-    sparse_encoder = SpladeEncoder(device=device)
-    retriever = PineconeHybridSearchRetriever(embeddings=dense_encoder, sparse_encoder=sparse_encoder, index=index, top_k=75, alpha=0.99899) #lower alpha - more sparse
-    return retriever
-
-#(next three functions) uses async api calls to rank chunks from 1-10 based on relevance
+#(next two functions) uses async api calls to rank chunks from 1-10 based on relevance
 async def async_rank(case, question, max_attempts=5):
     for attempt in range(max_attempts):
         try:
@@ -112,7 +102,6 @@ async def async_rank(case, question, max_attempts=5):
             ranking_user_message = HumanMessage(content=ranking_userprompt)
             relevance = await gpt35._agenerate([ranking_system_message, ranking_user_message])
             relevance_score = float(relevance.generations[0].text)
-            print(case.page_content, "\n", relevance_score, "\n")
             return (case, relevance_score)
         except ValueError:
             print(f"Attempt {attempt + 1} failed, did not return ranking number")
@@ -123,7 +112,9 @@ async def rank_concurrently(cases, question):
     tasks = [async_rank(case, question) for case in cases]
     results = await asyncio.gather(*tasks)
     sorted_results = sorted(results, key=lambda x: x[1], reverse=True)
-    sum_of_relevance = sum(relevance for _, relevance in results)
+    sum_of_relevance = sum(relevance for _, relevance in results)    
+    for index, (case, relevance_score) in enumerate(sorted_results, start=1):
+        print(f"Rank {index}:\n{case.page_content}\nRelevance Score: {relevance_score}\n")    
     return [case for case, _ in sorted_results], sum_of_relevance
 
 #rephrases query as optimized prompt for searching vectorstorage
@@ -150,7 +141,7 @@ def get_short_source(text):
 def get_data(id):
     parts = id.rsplit('_', 1)
     long_source = parts[0]
-    index = int(parts[1])
+    chunknr = int(parts[1])
     file_path = os.path.join('database', f'{long_source}.txt')
     try:
         with open(file_path, 'r', encoding='utf-8') as file:
@@ -158,13 +149,13 @@ def get_data(id):
             short_source = get_short_source(text)
             splits = text_splitter.split_text(text)
             cleaned_splits = [split.replace('\n', ' ').replace('\t', ' ') for split in splits]
-            page_content = cleaned_splits[index] if index < len(cleaned_splits) else None
+            page_content = cleaned_splits[chunknr] if chunknr < len(cleaned_splits) else None
             return Result(page_content, short_source, long_source)
     except FileNotFoundError:
         print(f"The file {file_path} does not exist.")
         return None
     except IndexError:
-        print(f"Index {index} out of range for file {file_path}.")
+        print(f"Index {chunknr} out of range for file {file_path}.")
         return None
 
 def getfullresults(ids):
@@ -175,15 +166,42 @@ def getfullresults(ids):
             results.append(result)
     return results
 
+def hybrid_scale(dense, sparse, alpha: float):
+    if alpha < 0 or alpha > 1:
+        raise ValueError("Alpha must be between 0 and 1")
+    hsparse = {
+        'indices': sparse['indices'],
+        'values':  [v * (1 - alpha) for v in sparse['values']]
+    }
+    hdense = [v * alpha for v in dense]
+    return hdense, hsparse
+
+def hybrid_query(question, top_k, alpha):
+    index = get_index()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    sparse_encoder = SpladeEncoder(device=device)
+    dense_encoder = OpenAIEmbeddings(model="text-embedding-ada-002")
+    sparse_vec = sparse_encoder.encode_documents([question])[0]
+    dense_vec = dense_encoder.embed_documents([question])[0]
+    dense_vec, sparse_vec = hybrid_scale(dense_vec, sparse_vec, alpha)
+
+    result = index.query(
+      vector=dense_vec,
+      sparse_vector=sparse_vec,
+      top_k=top_k,
+    )
+    id_list = [match['id'] for match in result['matches']]
+
+    return id_list
+
 async def main(question, streamhandler, queue):
     print("main has started execution")
     if not isinstance(question, str):
         print("Invalid input. Please provide a string.")
         return
-    retriever = get_retriever()
     dataquery = get_dataquery(question)
-    ids = retriever.get_relevant_documents(dataquery)
-    results = getfullresults(ids)
+    id_list = hybrid_query(dataquery)
+    results = getfullresults(id_list)
     print(results)
     print(f"Found this many cases: {len(results)}")
 
