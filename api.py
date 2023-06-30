@@ -21,6 +21,7 @@ import json
 from pydantic import BaseModel, ValidationError
 from langchain.callbacks.base import AsyncCallbackHandler
 import uvicorn
+from langchain.text_splitter import CharacterTextSplitter
 
 #init of global gpt-4 model, gpt-3.5-turbo model and OpenAI tokenizer
 gpt4_maxtokens = 8192
@@ -30,6 +31,7 @@ gpt4 = ChatOpenAI(model_name="gpt-4", temperature=0, max_tokens=2048, streaming=
 gpt35 = ChatOpenAI(model_name="gpt-3.5-turbo", temperature=0, max_tokens=5, max_retries=20)
 gptdataquery = ChatOpenAI(model_name="gpt-4", temperature=0, max_tokens=256)
 tokenizer = tiktoken.encoding_for_model("gpt-4")
+text_splitter = CharacterTextSplitter(chunk_size=1000, separator="\n")
 
 #template for final analysis prompt
 analysis_system_message = SystemMessage(content="Du bist ein im österreichischen Recht erfahrener Anwalt.")
@@ -75,7 +77,7 @@ def fill_tokens(results, max_tokens):
     token_count = 0
     
     for result in results:
-        new_text = f"Inhalt: {result.page_content}\nQuelle: {result.metadata['short_source']}\n"
+        new_text = f"Inhalt: {result.page_content}\nQuelle: {result.short_source}\n"
         new_tokens = list(tokenizer.encode(new_text))
         new_token_count = len(new_tokens)
         if token_count + new_token_count > max_tokens:
@@ -90,7 +92,7 @@ def fill_tokens(results, max_tokens):
 def get_index():
     env = "eu-west4-gcp"
     pinecone.init(environment=env)
-    return pinecone.Index("justiz-openai")
+    return pinecone.Index("justiz-openai-full")
 
 #loads dense and sparse encoder models and returns retriever to send requests to the database
 def get_retriever():
@@ -132,6 +134,47 @@ def get_dataquery(question):
     print(f"Looking in database for: {dataquery.content}")
     return dataquery.content
 
+class Result:
+    def __init__(self, page_content, short_source, long_source):
+        self.page_content = page_content
+        self.short_source = short_source
+        self.long_source = long_source
+
+def get_short_source(text):
+    lines = text.split("\n")
+    for j, line in enumerate(lines):
+        if "Geschäftszahl" in line and j < len(lines) - 1:
+            return lines[j + 1]
+    return None
+
+def get_data(id):
+    parts = id.rsplit('_', 1)
+    long_source = parts[0]
+    index = int(parts[1])
+    file_path = os.path.join('database', f'{long_source}.txt')
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            text = file.read()
+            short_source = get_short_source(text)
+            splits = text_splitter.split_text(text)
+            cleaned_splits = [split.replace('\n', ' ').replace('\t', ' ') for split in splits]
+            page_content = cleaned_splits[index] if index < len(cleaned_splits) else None
+            return Result(page_content, short_source, long_source)
+    except FileNotFoundError:
+        print(f"The file {file_path} does not exist.")
+        return None
+    except IndexError:
+        print(f"Index {index} out of range for file {file_path}.")
+        return None
+
+def getfullresults(ids):
+    results = []
+    for id in ids:
+        result = get_data(id)
+        if result is not None:
+            results.append(result)
+    return results
+
 async def main(question, streamhandler, queue):
     print("main has started execution")
     if not isinstance(question, str):
@@ -139,7 +182,9 @@ async def main(question, streamhandler, queue):
         return
     retriever = get_retriever()
     dataquery = get_dataquery(question)
-    results = retriever.get_relevant_documents(dataquery)
+    ids = retriever.get_relevant_documents(dataquery)
+    results = getfullresults(ids)
+    print(results)
     print(f"Found this many cases: {len(results)}")
 
     results, sum_of_relevance = await rank_concurrently(results, question)  # Replaced rank_cases with rank_concurrently
@@ -196,7 +241,6 @@ class MyCustomAsyncHandler(AsyncCallbackHandler):
         self.queue = queue
 
     async def on_llm_new_token(self, token: str, **kwargs) -> None:
-        print(f"Async handler being called: token: {token}")
         if self.queue is not None:
             await self.queue.put(token)
         else:
@@ -218,7 +262,6 @@ async def websocket_endpoint(websocket: WebSocket):
             continue
         handler = MyCustomAsyncHandler(queue)
         asyncio.create_task(main(item.input, handler, queue))
-        #await queue.put("test1")
         print("Started task")
         while True:
             token = await queue.get()
