@@ -14,7 +14,7 @@ from langchain.schema import (
 from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
 import asyncio
 from langchain.embeddings import OpenAIEmbeddings
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket, Depends, HTTPException, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import json
@@ -272,30 +272,46 @@ class MyCustomAsyncHandler(AsyncCallbackHandler):
         else:
             print("Error: queue is not set")
 
+SECRET_API_KEY = os.environ.get("SECRET_API_KEY")
+
+def get_api_key(websocket: WebSocket):
+    api_key = websocket.query_params.get("api_key")
+    print(f"Received API Key: {api_key}")  # Debugging line
+    if api_key != SECRET_API_KEY:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    return api_key
+
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_endpoint(websocket: WebSocket, api_key: str = Depends(get_api_key)):
     await websocket.accept()
-    while True:
-        print("Waiting for client data...")
-        queue = asyncio.Queue()
-        data = await websocket.receive_text()
-        print(f"Received data: {data}")
-        try:
-            item = Item(**json.loads(data))
-            print(f"Received item: {item.input}")
-        except ValidationError as e:
-            print(f"Error: {e}")
-            continue
-        handler = MyCustomAsyncHandler(queue)
-        asyncio.create_task(main(item.input, handler, queue))
-        print("Started task")
+    try:
         while True:
-            token = await queue.get()
-            print(token)
-            if token == "TABALUGA_WARTET":
-                print("Done sending response")
-                break
-            await websocket.send_text(token)
+            print("Waiting for client data...")
+            queue = asyncio.Queue()
+            data = await websocket.receive_text()
+            print(f"Received data: {data}")
+            try:
+                item = Item(**json.loads(data))
+                print(f"Received item: {item.input}")
+            except ValidationError as e:
+                print(f"Error: {e}")
+                continue
+            handler = MyCustomAsyncHandler(queue)
+            asyncio.create_task(main(item.input, handler, queue))
+            print("Started task")
+            while True:
+                token = await queue.get()
+                print(token)
+                if token == "TABALUGA_WARTET":
+                    print("Done sending response")
+                    break
+                await websocket.send_text(token)
+    except WebSocketDisconnect:
+        print("WebSocket connection was closed unexpectedly.")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+    finally:
+        await websocket.close()
 
 if __name__ == "__main__":
     uvicorn.run(app, host='0.0.0.0', port=8000)
