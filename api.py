@@ -310,8 +310,6 @@ async def websocket_endpoint(websocket: WebSocket, api_key: str = Depends(get_ap
         print("WebSocket connection was closed unexpectedly.")
     except Exception as e:
         print(f"Unexpected error: {e}")
-    finally:
-        await websocket.close()
 
 if __name__ == "__main__":
     uvicorn.run(app, host='0.0.0.0', port=8000)
